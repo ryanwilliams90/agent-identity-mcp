@@ -116,8 +116,18 @@ def test_scoped_credential_carries_all_identity_facets() -> None:
         "expires_at",
         "nonce",
         "credential_id",
+        "invocation_id",
     ):
         assert required_key in payload, f"missing {required_key} in signed payload"
+
+
+def test_invocation_id_round_trips_through_signing() -> None:
+    """The gateway-supplied invocation_id is part of the signed payload."""
+    key = SigningKey.generate()
+    credential = _make_credential(invocation_id="inv-abc-123")
+    signed = sign(credential, key)
+    recovered = verify_signature(signed.encode(), key.verify_key)
+    assert recovered.invocation_id == "inv-abc-123"
 
 
 def test_signed_credential_is_a_value_type() -> None:

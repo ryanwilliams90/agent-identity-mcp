@@ -131,3 +131,90 @@ def test_unknown_obligations_do_not_break_issuance(
     assert signed.credential.expires_at - signed.credential.issued_at == pytest.approx(
         15.0, abs=0.5
     )
+
+
+def test_malformed_max_ttl_zero_is_denied_not_silently_dropped(
+    gateway: CredentialGateway, audit: InMemoryAuditSink
+) -> None:
+    """``max_ttl=0`` is a malformed obligation; the gateway denies issuance.
+
+    The earlier behavior was to leak a raw ``ValueError`` from
+    ``ScopedCredential.issue``. The fix: convert into ``IssuanceDenied``
+    with an explicit reason, and audit the denial.
+    """
+
+    class ZeroTtlPolicy:
+        def evaluate(self, ctx: RequestContext) -> Decision:
+            return Decision(allow=True, reason="permitted", obligations=("max_ttl=0",))
+
+    gateway.policy = ZeroTtlPolicy()
+    with pytest.raises(IssuanceDenied, match="malformed policy obligation"):
+        gateway.issue(_ctx())
+
+    denied = audit.by_kind("policy.denied")
+    assert len(denied) == 1
+    assert "max_ttl=0" in (denied[0].reason or "")
+    assert audit.by_kind("credential.issued") == []
+
+
+def test_malformed_max_ttl_negative_is_denied_not_silently_dropped(
+    gateway: CredentialGateway, audit: InMemoryAuditSink
+) -> None:
+    """A negative ``max_ttl`` is malformed and rejected — not ignored.
+
+    The earlier behavior was for the regex to silently fail to match
+    negative values, leaving the ceiling as the effective TTL. Defense
+    in depth means tighter bounds win — and an unparseable bound is
+    treated as a policy bug, not a permission to relax.
+    """
+
+    class NegativeTtlPolicy:
+        def evaluate(self, ctx: RequestContext) -> Decision:
+            return Decision(allow=True, reason="permitted", obligations=("max_ttl=-30",))
+
+    gateway.policy = NegativeTtlPolicy()
+    with pytest.raises(IssuanceDenied, match="malformed policy obligation"):
+        gateway.issue(_ctx())
+
+    denied = audit.by_kind("policy.denied")
+    assert len(denied) == 1
+    assert "max_ttl=-30" in (denied[0].reason or "")
+
+
+def test_unparseable_max_ttl_is_denied(
+    gateway: CredentialGateway, audit: InMemoryAuditSink
+) -> None:
+    """A ``max_ttl=`` value that isn't a number is rejected explicitly."""
+
+    class GarbageTtlPolicy:
+        def evaluate(self, ctx: RequestContext) -> Decision:
+            return Decision(allow=True, reason="permitted", obligations=("max_ttl=abc",))
+
+    gateway.policy = GarbageTtlPolicy()
+    with pytest.raises(IssuanceDenied, match="malformed policy obligation"):
+        gateway.issue(_ctx())
+
+
+def test_invocation_id_threads_through_audit_chain(
+    gateway: CredentialGateway, audit: InMemoryAuditSink
+) -> None:
+    """Every audit event for one issuance shares an invocation_id.
+
+    The case study claims the audit chain ties events back to a single
+    agent action. This test pins the explicit linkage rather than
+    relying on credential_id + timestamp ordering.
+    """
+    signed = gateway.issue(_ctx())
+
+    issued = audit.by_kind("credential.issued")
+    assert len(issued) == 1
+    assert issued[0].invocation_id is not None
+    assert signed.credential.invocation_id == issued[0].invocation_id
+
+
+def test_distinct_issuances_get_distinct_invocation_ids(
+    gateway: CredentialGateway,
+) -> None:
+    a = gateway.issue(_ctx())
+    b = gateway.issue(_ctx())
+    assert a.credential.invocation_id != b.credential.invocation_id

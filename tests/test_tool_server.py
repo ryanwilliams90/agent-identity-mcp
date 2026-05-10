@@ -105,7 +105,6 @@ def test_invoke_with_unknown_action_after_verification(
 
     from aim.audit import InMemoryAuditSink
     from aim.credential import ScopedCredential, sign
-    from aim.policy import HardcodedPolicy
     from aim.tool_server import ToolError
     from aim.verifier import Verifier
 
@@ -142,4 +141,3 @@ def test_invoke_with_unknown_action_after_verification(
     invoked = audit.by_kind("tool.invoked")
     assert len(invoked) == 1
     assert invoked[0].outcome == "not_implemented"
-    _ = HardcodedPolicy  # silence unused-import lint

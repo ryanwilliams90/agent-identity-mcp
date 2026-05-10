@@ -133,6 +133,7 @@ def test_expired_credential_rejected(
     # Build an already-expired credential by hand to avoid real-time waits.
     expired = ScopedCredential(
         credential_id="cred-expired",
+        invocation_id="inv-expired",
         user="alice@example.com",
         agent="agent-runtime-A",
         task="task-001",
@@ -164,11 +165,11 @@ def test_tampered_credential_rejected(
 ) -> None:
     """Mutating the encoded payload after signing causes rejection.
 
-    Note: tampering produces either ``BadCredential`` (the modified
-    payload still parses but fails signature verification) or ``BadCredential``
-    via ``MalformedCredential`` (the modification produced invalid
-    base64url or invalid JSON). Both surface as ``BadCredential`` to the
-    caller, which is the contract.
+    Tampering raises one of two underlying credential errors —
+    ``InvalidSignature`` (modified payload parses but fails signature
+    verification) or ``MalformedCredential`` (modification produced
+    invalid base64url or invalid JSON). Both surface to the caller as
+    ``BadCredential``; that uniform shape is the verifier's contract.
     """
     signed = gateway.issue(_ctx())
     encoded = signed.encode()

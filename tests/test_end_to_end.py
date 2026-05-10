@@ -112,3 +112,54 @@ def test_tool_code_is_not_reached_when_verification_fails(
     # The structural claim: no tool.invoked, no tool.completed.
     assert "tool.invoked" not in kinds
     assert "tool.completed" not in kinds
+
+
+def test_invocation_id_links_full_chain(
+    gateway: CredentialGateway,
+    tool_server: ToolServer,
+    audit: InMemoryAuditSink,
+) -> None:
+    """All four events of one happy path share a single invocation_id."""
+    gateway.issue(_ctx(action="list"))
+    # The signed credential carries the invocation_id; reuse it via the
+    # full-flow path to make the linkage observable end to end.
+    signed = gateway.issue(_ctx(action="list"))
+    tool_server.invoke(action="list", encoded_credential=signed.encode())
+
+    # Find the issuance event matching this credential's invocation_id.
+    invocation_id = signed.credential.invocation_id
+    matching = [e for e in audit.events if e.invocation_id == invocation_id]
+
+    # Issuance, tool.invoked, tool.completed — three events, same
+    # invocation id.
+    assert {e.kind for e in matching} == {
+        "credential.issued",
+        "tool.invoked",
+        "tool.completed",
+    }
+
+
+def test_invocation_id_links_rejection_to_issuance(
+    gateway: CredentialGateway,
+    tool_server: ToolServer,
+    audit: InMemoryAuditSink,
+) -> None:
+    """A verifier rejection carries the same invocation_id as the issuance.
+
+    This is the audit-causality property: a downstream consumer can ask
+    'what happened to invocation X?' and get both events back without
+    needing timestamp ordering.
+    """
+    signed = gateway.issue(_ctx(action="list"))
+    invocation_id = signed.credential.invocation_id
+
+    with pytest.raises(ActionMismatch):
+        tool_server.invoke(
+            action="read",  # mismatch
+            encoded_credential=signed.encode(),
+            arguments={"issue_id": "ISS-1"},
+        )
+
+    matching = [e for e in audit.events if e.invocation_id == invocation_id]
+    kinds = {e.kind for e in matching}
+    assert kinds == {"credential.issued", "verifier.rejected"}
