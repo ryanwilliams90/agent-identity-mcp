@@ -28,6 +28,10 @@ The headline demo:
 
 The structural property: the rejection isn't a polite check the tool code chose to make. The verifier is the only path into the handler, so legitimate tool servers don't accidentally bypass scope enforcement.
 
+## Audit linkage
+
+Every event in one agent action's chain — issuance, verifier rejection, tool invocation, completion — carries a shared `invocation_id`. A downstream consumer can ask "what happened to invocation X?" and get the full chain back without joining on timestamps. The `invocation_id` is generated at the gateway and signed into the credential, so a verifier-side rejection record carries the same id as the issuance record it correlates to.
+
 ## What the verifier checks
 
 Each rejection is a distinct exception class, audited under a distinct outcome code:
@@ -98,11 +102,13 @@ rejected: credential is for issues.list, request is for issues.read
 
 ## What this is not
 
-- **A production auth system.** Real deployments need a credential revocation service, key rotation, replay state that survives a process restart, and an audit sink that's durable and tamper-evident. None of those are here.
+- **A production auth system.** Real deployments need credential revocation, key rotation, replay state that survives a process restart, and an audit sink that's durable and tamper-evident. None of those are here.
 - **A canonical reference framework.** The prototype demonstrates a design claim. It is not trying to be the implementation that organizations adopt.
 - **A full MCP implementation.** The tool server is MCP-style — invoke an action with arguments, return a result — but doesn't implement the MCP protocol itself.
 - **A policy engine.** `HardcodedPolicy` exists to satisfy the `PolicyEvaluator` Protocol so the rest of the system is exercisable end to end. Real deployments would back the evaluator with OPA, Cedar, or similar.
+- **A revocation service.** A real platform needs a way to revoke a credential before its TTL expires. The verifier here only checks signature, audience, action, expiry, and replay; there is no revocation list. Adding one is a small change against this design (the verifier consults a revocation set before accepting), but it isn't here.
 - **Delegation chains.** A credential carries a single user and a single agent. Multi-step task graphs and delegated authority are out of scope here; the case study's "open questions" section discusses what those would require.
+- **Handle-isolation between agent and credential bytes.** The case study mentions that production designs may give the agent an opaque handle that the gateway resolves on its behalf, keeping the raw credential out of the agent runtime. The prototype does not do this — the agent receives the encoded credential string directly. The prototype's claim is *scope-binding* (the credential is cryptographically restricted to one action), not *handle-isolation* (the agent never holds the credential). Both are useful properties; this prototype demonstrates the first, not the second.
 
 ## Notes on choices
 
