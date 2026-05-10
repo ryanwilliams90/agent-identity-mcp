@@ -89,6 +89,7 @@ class ToolServer:
                     tool=self.tool,
                     action=action,
                     credential_id=credential.credential_id,
+                    invocation_id=credential.invocation_id,
                     reason="action verified by policy but not implemented by tool server",
                     outcome="not_implemented",
                 )
@@ -104,6 +105,7 @@ class ToolServer:
                 tool=self.tool,
                 action=action,
                 credential_id=credential.credential_id,
+                invocation_id=credential.invocation_id,
                 outcome="invoked",
             )
         )
@@ -119,6 +121,7 @@ class ToolServer:
                 tool=self.tool,
                 action=action,
                 credential_id=credential.credential_id,
+                invocation_id=credential.invocation_id,
                 outcome="ok",
             )
         )

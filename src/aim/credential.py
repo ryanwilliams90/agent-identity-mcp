@@ -43,13 +43,19 @@ class MalformedCredential(CredentialError):
 class ScopedCredential:
     """A capability to perform a specific action, bound to a specific actor.
 
-    All five identity facets are part of the signed payload, so a verifier
-    that checks signature + audience + action + expiry + nonce has, by
+    All identity facets are part of the signed payload, so a verifier that
+    checks signature + audience + action + expiry + nonce has, by
     construction, also checked who the credential was issued to and what
     task it was issued for.
+
+    ``invocation_id`` ties this credential to the gateway-side issuance
+    event. The verifier surfaces it on rejection records so a downstream
+    consumer can join issuance, verification, and execution events for a
+    single agent action without timestamp ordering.
     """
 
     credential_id: str
+    invocation_id: str
     user: str
     agent: str
     task: str
@@ -75,6 +81,7 @@ class ScopedCredential:
         action: str,
         audience: str,
         ttl_seconds: float,
+        invocation_id: str | None = None,
         now: float | None = None,
     ) -> ScopedCredential:
         """Construct a credential with a fresh id and nonce.
@@ -82,12 +89,17 @@ class ScopedCredential:
         ``ttl_seconds`` is bounded by the caller (the gateway). This
         constructor does not enforce a ceiling — the policy evaluator and
         gateway are the right place for that decision.
+
+        ``invocation_id`` defaults to a fresh UUID; the gateway passes one
+        explicitly so the issuance audit event and the credential carry
+        the same id.
         """
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         t = time.time() if now is None else now
         return cls(
             credential_id=str(uuid.uuid4()),
+            invocation_id=invocation_id if invocation_id is not None else str(uuid.uuid4()),
             user=user,
             agent=agent,
             task=task,
@@ -117,8 +129,11 @@ class SignedCredential:
         """Serialize to a single transmissible string.
 
         Format: base64url(json(payload)) + "." + base64url(signature).
-        Mirrors the JWT shape so the structure is familiar; nothing in the
-        verifier depends on it being JWT-compatible.
+        Resembles JWT (two base64url segments) but is *not* JWT-compatible:
+        there is no header segment, the algorithm is implicit (Ed25519),
+        and the payload schema is the ``ScopedCredential`` dataclass, not
+        the JWT claim set. A JWT library cannot decode this; only
+        ``verify_signature`` in this module can.
         """
         payload_json = json.dumps(self.credential.to_payload(), sort_keys=True)
         payload_b64 = _b64url_encode(payload_json.encode("utf-8"))

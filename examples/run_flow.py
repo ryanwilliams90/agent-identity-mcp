@@ -74,12 +74,14 @@ def main() -> None:
     print()
 
     print("=== audit chain ===")
+    print("(invocation_id ties events from one agent action together)")
     for event in audit.events:
         record = {
             "kind": event.kind,
+            "invocation_id": (
+                event.invocation_id[:8] + "..." if event.invocation_id else None
+            ),
             "user": event.user,
-            "agent": event.agent,
-            "task": event.task,
             "tool": event.tool,
             "action": event.action,
             "outcome": event.outcome,

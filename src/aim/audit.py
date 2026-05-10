@@ -36,8 +36,12 @@ class AuditEvent:
 
     Fields are populated to whatever degree is meaningful for the kind of
     event. ``credential_id`` is set whenever a credential exists in the
-    chain (issuance, verification, tool invocation). ``reason`` carries
-    the policy decision text or the verifier's rejection reason.
+    chain (issuance, verification, tool invocation). ``invocation_id`` is
+    the gateway-side correlation id that ties one agent action's
+    issuance, verification, and execution events together — set on every
+    event in the chain except verifier rejections of malformed
+    credentials, where the credential body is not trusted. ``reason``
+    carries the policy decision text or the verifier's rejection reason.
     """
 
     event_id: str
@@ -49,6 +53,7 @@ class AuditEvent:
     tool: str
     action: str
     credential_id: str | None = None
+    invocation_id: str | None = None
     reason: str | None = None
     outcome: str | None = None
 
@@ -87,6 +92,7 @@ def make_event(
     tool: str,
     action: str,
     credential_id: str | None = None,
+    invocation_id: str | None = None,
     reason: str | None = None,
     outcome: str | None = None,
     now: float | None = None,
@@ -101,6 +107,7 @@ def make_event(
         tool=tool,
         action=action,
         credential_id=credential_id,
+        invocation_id=invocation_id,
         reason=reason,
         outcome=outcome,
     )

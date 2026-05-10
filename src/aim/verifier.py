@@ -93,6 +93,22 @@ class Verifier:
     the tool server before any tool code runs, and either returns the
     decoded ``ScopedCredential`` (verification passed) or raises a
     ``VerificationFailed`` subclass.
+
+    Replay protection caveats this prototype does not address:
+
+    - The ``_seen_nonces`` set grows without bound. A real verifier would
+      evict nonces whose credentials have expired (since expired
+      credentials are rejected anyway, retaining their nonces serves no
+      purpose) and back the set with a shared store so multiple verifier
+      processes share replay state.
+    - The check-then-add (``in`` then ``add``) is not atomic. CPython's
+      GIL makes a single set operation atomic, not the pair; two
+      verifier instances on the same nonce could both succeed under
+      racing concurrent calls. A production implementation needs an
+      atomic compare-and-set against the shared store.
+
+    Both are intentionally out of scope; the prototype demonstrates the
+    rejection property, not durable replay state.
     """
 
     verify_key: VerifyKey
@@ -198,6 +214,7 @@ class Verifier:
                 tool=requested_tool,
                 action=requested_action,
                 credential_id=credential.credential_id if credential else None,
+                invocation_id=credential.invocation_id if credential else None,
                 reason=reason,
                 outcome=code,
             )
