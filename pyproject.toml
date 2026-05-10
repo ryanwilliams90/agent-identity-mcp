@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-identity-mcp"
+version = "0.1.0"
+description = "Reference implementation of gateway-mediated scoped credential issuance for agent runtimes calling MCP-style tools."
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ryan Williams" }]
+dependencies = [
+    "PyNaCl>=1.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "mypy>=1.8",
+    "ruff>=0.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+aim = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "RET"]
+# N818 prefers "Error"-suffixed exception names. The error taxonomy here
+# (`InvalidSignature`, `MalformedCredential`, `IssuanceDenied`,
+# `VerificationFailed`, `ActionMismatch`, etc.) reads more naturally as
+# condition-shaped names — Python's stdlib uses the same convention
+# (`KeyError` is the exception class name; `BadSignatureError` and
+# `InvalidSignature` both appear in real codebases).
+ignore = ["N818"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
