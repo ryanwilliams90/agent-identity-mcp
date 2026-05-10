@@ -1,5 +1,7 @@
 # Agent Identity / MCP Credential Plane — Reference Implementation
 
+[![ci](https://github.com/ryanwilliams90/agent-identity-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanwilliams90/agent-identity-mcp/actions/workflows/ci.yml)
+
 A small, working demonstration of gateway-mediated scoped credential issuance for agent runtimes calling MCP-style tools.
 
 > **Python 3.11+** · `mypy --strict` clean · `ruff` clean · contract-driven tests · Ed25519 signatures via PyNaCl
@@ -24,9 +26,53 @@ The headline demo:
 
 1. Agent requests a credential to call `issues.list` on behalf of a user. Policy evaluates, gateway signs an Ed25519 credential bound to `(user, agent, task, tool=issues, action=list, audience=tool-server.issues, exp=T+30s, nonce=...)`.
 2. Agent presents the credential to the tool server, requests the `list` action. Verifier accepts. List handler runs. Audit shows `credential.issued → tool.invoked → tool.completed`.
-3. Agent presents the same kind of credential, but requests the `read` action. Verifier rejects with `ActionMismatch` *before* the read handler runs. Audit shows `credential.issued → verifier.rejected` — no `tool.invoked` for the rejected action.
+3. Agent presents *the credential it received in step 1* (issued for `list`) to call `read`. Verifier rejects with `ActionMismatch` *before* the read handler runs. Audit shows `credential.issued → verifier.rejected` — no `tool.invoked` for the rejected action. The interesting property is that this is a real, valid credential being reused for a different action; the rejection is structural, not a freshness check.
 
 The structural property: the rejection isn't a polite check the tool code chose to make. The verifier is the only path into the handler, so legitimate tool servers don't accidentally bypass scope enforcement.
+
+## The two control-flow paths
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Agent
+    participant Gateway as CredentialGateway
+    participant Policy as PolicyEvaluator
+    participant Server as ToolServer
+    participant Verifier
+    participant Tool as list/read handler
+    participant Audit
+
+    rect rgba(120, 180, 120, 0.10)
+        Note over Agent,Audit: happy path — credential issued for list, used for list
+        Agent->>Gateway: issue(ctx{action=list})
+        Gateway->>Policy: evaluate(ctx)
+        Policy-->>Gateway: Decision(allow, max_ttl=30)
+        Gateway->>Audit: credential.issued
+        Gateway-->>Agent: SignedCredential
+        Agent->>Server: invoke(action=list, credential)
+        Server->>Verifier: verify(credential, requested=list)
+        Verifier-->>Server: ScopedCredential ✓
+        Server->>Audit: tool.invoked
+        Server->>Tool: list()
+        Tool-->>Server: [issues]
+        Server->>Audit: tool.completed
+        Server-->>Agent: result
+    end
+
+    rect rgba(220, 130, 130, 0.10)
+        Note over Agent,Audit: escalation attempt — same-shape credential, different action
+        Agent->>Gateway: issue(ctx{action=list})
+        Gateway-->>Agent: SignedCredential (for list)
+        Agent->>Server: invoke(action=read, credential)
+        Server->>Verifier: verify(credential, requested=read)
+        Verifier->>Audit: verifier.rejected (action_mismatch)
+        Verifier--xServer: ActionMismatch
+        Note over Server,Tool: tool code never reached
+    end
+```
+
+Two things the diagram makes visible that prose alone obscures: the verifier sits between the tool server and any tool handler (so a tool server cannot reach a handler without it), and a rejection emits an audit record but no `tool.invoked` event — the handler is structurally never called.
 
 ## Audit linkage
 
@@ -93,11 +139,16 @@ tool returned 3 issues
 rejected: credential is for issues.list, request is for issues.read
 
 === audit chain ===
-{"kind": "credential.issued", "user": "alice@example.com", ...}
-{"kind": "tool.invoked", ...}
-{"kind": "tool.completed", ...}
-{"kind": "credential.issued", ...}
-{"kind": "verifier.rejected", "outcome": "action_mismatch", ...}
+(invocation_id ties events from one agent action together)
+
+--- happy path ---
+{"kind": "credential.issued", "invocation_id": "7d3603a5...", "outcome": "issued"}
+{"kind": "tool.invoked",      "invocation_id": "7d3603a5...", "outcome": "invoked"}
+{"kind": "tool.completed",    "invocation_id": "7d3603a5...", "outcome": "ok"}
+
+--- escalation attempt ---
+{"kind": "credential.issued", "invocation_id": "3631c5fc...", "outcome": "issued"}
+{"kind": "verifier.rejected", "invocation_id": "3631c5fc...", "outcome": "action_mismatch"}
 ```
 
 ## What this is not
@@ -115,7 +166,9 @@ rejected: credential is for issues.list, request is for issues.read
 - **Ed25519, not HMAC.** The case study is about agent *identity*. A core property of identity systems is that verifiers can check credentials without sharing secrets with the issuer. HMAC requires the tool server and the gateway to share a key — exactly the shape an agent-identity story should reject. Ed25519 lets the gateway sign with a private key and any tool server verify with a public key, which is what production systems actually do (RS256/ES256 JWTs, SPIFFE's X.509, etc.).
 - **Policy as a Protocol with a hardcoded implementation.** The Protocol shape (`evaluate(ctx) → Decision` with `allow` / `reason` / `obligations`) maps cleanly to OPA's decision documents and Cedar's policy outcomes. Swapping `HardcodedPolicy` for a real backend is substituting an implementation, not rewriting call sites.
 - **Defense-in-depth on TTL.** The gateway clamps issued TTL to `min(ceiling, max_ttl_obligation)`. Even a buggy policy that asks for a 600-second TTL gets clipped to the gateway's 60-second ceiling. The audit record carries the actual issued expiry; what the policy *asked* for and what the gateway *granted* are not assumed equal.
-- **In-memory replay cache.** Sufficient to demonstrate the property; not durable. Real deployments would back this with a shared store with TTL eviction tied to credential expiry.
+- **Wire format: base64url(JSON) + "." + base64url(signature).** Resembles a JWT visually but is *not* JWT-compatible — there is no header segment, the algorithm is implicit (Ed25519), and the payload schema is the `ScopedCredential` dataclass, not the JWT claim set. JSON was the cheapest readable choice for a prototype; production designs would more plausibly use CBOR or COSE for compactness and signed-payload determinism, with proper header negotiation for algorithm agility.
+- **In-memory replay cache, per verifier instance.** This is the prototype's most material production weakness, called out explicitly: each `Verifier` instance maintains its own nonce set, so a fleet of N verifiers cannot detect cross-instance replay — an attacker who captures a credential and presents it to a different verifier than the one that originally accepted it will pass the replay check. Real deployments need a shared, atomic check-and-set against a store like Redis (with TTL eviction tied to credential expiry). The prototype demonstrates the *property* of replay rejection, not the deployment shape.
+- **Audit sink in-memory.** `InMemoryAuditSink` is sufficient to demonstrate that every event in the trust chain is captured. A real platform writes to a durable, append-only sink with cryptographic chaining (Merkle tree or hash-chained) for tamper-evidence and forwards to a SIEM. The `AuditSink` Protocol exists so swapping the backend doesn't touch the gateway, verifier, or tool server.
 
 ## Related
 

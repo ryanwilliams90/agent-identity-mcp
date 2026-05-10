@@ -55,6 +55,7 @@ def main() -> None:
 
     print("=== happy path: agent calls list with a list-scoped credential ===")
     signed_list = gateway.issue(base_ctx)
+    happy_invocation = signed_list.credential.invocation_id
     result = tool_server.invoke(action="list", encoded_credential=signed_list.encode())
     print(f"tool returned {len(result)} issues")
     print()
@@ -62,11 +63,12 @@ def main() -> None:
     print("=== escalation attempt: agent presents the list credential to call read ===")
     print("(this is the threat model — buggy/compromised path tries to use a")
     print(" credential beyond its issued action; verifier rejects before tool runs)")
-    signed_for_list_again = gateway.issue(base_ctx)
+    signed_for_escalation = gateway.issue(base_ctx)
+    escalation_invocation = signed_for_escalation.credential.invocation_id
     try:
         tool_server.invoke(
             action="read",  # different action from what the credential authorizes
-            encoded_credential=signed_for_list_again.encode(),
+            encoded_credential=signed_for_escalation.encode(),
             arguments={"issue_id": "ISS-1"},
         )
     except ActionMismatch as exc:
@@ -75,13 +77,21 @@ def main() -> None:
 
     print("=== audit chain ===")
     print("(invocation_id ties events from one agent action together)")
+    print()
+    print("--- happy path ---")
+    _print_events_for_invocation(audit, happy_invocation)
+    print()
+    print("--- escalation attempt ---")
+    _print_events_for_invocation(audit, escalation_invocation)
+
+
+def _print_events_for_invocation(audit: InMemoryAuditSink, invocation_id: str) -> None:
     for event in audit.events:
+        if event.invocation_id != invocation_id:
+            continue
         record = {
             "kind": event.kind,
-            "invocation_id": (
-                event.invocation_id[:8] + "..." if event.invocation_id else None
-            ),
-            "user": event.user,
+            "invocation_id": event.invocation_id[:8] + "...",
             "tool": event.tool,
             "action": event.action,
             "outcome": event.outcome,
