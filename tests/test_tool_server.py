@@ -141,3 +141,58 @@ def test_invoke_with_unknown_action_after_verification(
     invoked = audit.by_kind("tool.invoked")
     assert len(invoked) == 1
     assert invoked[0].outcome == "not_implemented"
+
+
+def test_handler_exception_propagates_through_invoke(
+    audit: InMemoryAuditSink,
+) -> None:
+    """A handler that raises must propagate the exception to the caller.
+
+    Without this, a regression that swallowed handler errors silently
+    (e.g., wrapping the call in a bare ``except`` and returning ``None``)
+    would let bugs in tool implementations pass through as successful
+    invocations. The audit chain must show ``tool.invoked`` (verification
+    succeeded) and not ``tool.completed`` (the handler did not finish).
+    """
+    from nacl.signing import SigningKey
+
+    from aim.credential import ScopedCredential, sign
+    from aim.verifier import Verifier
+
+    class _Boom(RuntimeError):
+        pass
+
+    def handler_that_raises(_: dict[str, object]) -> object:
+        raise _Boom("handler intentionally failed")
+
+    key = SigningKey.generate()
+    verifier = Verifier(
+        verify_key=key.verify_key,
+        audience="tool-server.issues",
+        audit=audit,
+    )
+    server = ToolServer(
+        tool="issues",
+        verifier=verifier,
+        audit=audit,
+        _handlers={"list": handler_that_raises},
+    )
+    cred = ScopedCredential.issue(
+        user="alice@example.com",
+        agent="agent-runtime-A",
+        task="task-001",
+        tool="issues",
+        action="list",
+        audience="tool-server.issues",
+        ttl_seconds=30.0,
+    )
+    signed = sign(cred, key)
+
+    with pytest.raises(_Boom, match="intentionally failed"):
+        server.invoke(action="list", encoded_credential=signed.encode())
+
+    # Verification succeeded, handler ran (and raised), completion did
+    # not happen. Audit chain reflects exactly that.
+    assert audit.by_kind("verifier.rejected") == []
+    assert len(audit.by_kind("tool.invoked")) == 1
+    assert audit.by_kind("tool.completed") == []

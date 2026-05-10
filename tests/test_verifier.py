@@ -55,15 +55,33 @@ def _ctx(**overrides: str) -> RequestContext:
 # ---- Happy path ---------------------------------------------------------
 
 
-def test_valid_credential_succeeds(gateway: CredentialGateway, verifier: Verifier) -> None:
+def test_valid_credential_succeeds(
+    gateway: CredentialGateway, verifier: Verifier, audit: InMemoryAuditSink
+) -> None:
+    """A successful verification:
+
+    - returns the credential body unchanged from what the gateway signed
+      (no field substitution, no mutation)
+    - emits no ``verifier.rejected`` event
+
+    The earlier version of this test only checked two fields and didn't
+    pin the audit absence. A regression where the verifier emitted both
+    a success and a rejection event would have passed.
+    """
     signed = gateway.issue(_ctx())
     credential = verifier.verify(
         signed.encode(),
         requested_action="list",
         requested_tool="issues",
     )
-    assert credential.user == "alice@example.com"
-    assert credential.action == "list"
+
+    # The returned credential is byte-for-byte equal to what the gateway
+    # signed. Anything less invites a class of bugs where the verifier
+    # silently substitutes fields.
+    assert credential == signed.credential
+
+    # Successful verification must not produce a rejection record.
+    assert audit.by_kind("verifier.rejected") == []
 
 
 # ---- Rejection paths ----------------------------------------------------

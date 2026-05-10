@@ -59,17 +59,34 @@ def test_signature_does_not_verify_under_a_different_key() -> None:
 
 
 def test_tampered_payload_invalidates_signature() -> None:
+    """Mutating the payload while keeping it parseable must surface as
+    ``InvalidSignature``, not ``MalformedCredential``.
+
+    The earlier test accepted either, which let a regression where
+    tampering corrupted the JSON (rather than failing the signature
+    check) pass for the wrong reason. Here we mutate a single character
+    inside the ``user`` field so the payload remains valid JSON with all
+    fields present — the only check that can reject it is the signature.
+    """
+    import base64
+    import json
+
     key = SigningKey.generate()
-    signed = sign(_make_credential(), key)
+    signed = sign(_make_credential(user="alice@example.com"), key)
     encoded = signed.encode()
-    payload, sig = encoded.split(".", 1)
+    payload_b64, sig_b64 = encoded.split(".", 1)
 
-    # Flip a bit in the payload (deterministically — replace the first
-    # ascii letter with one that differs but is still valid base64url).
-    tampered_payload = ("A" if not payload.startswith("A") else "B") + payload[1:]
-    tampered = f"{tampered_payload}.{sig}"
+    # Decode payload, mutate user field deterministically, re-encode. The
+    # signature still references the original bytes, so verification must
+    # raise InvalidSignature specifically.
+    payload_bytes = base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4))
+    body = json.loads(payload_bytes.decode("utf-8"))
+    body["user"] = "mallory@example.com"
+    tampered_bytes = json.dumps(body, sort_keys=True).encode("utf-8")
+    tampered_b64 = base64.urlsafe_b64encode(tampered_bytes).rstrip(b"=").decode("ascii")
+    tampered = f"{tampered_b64}.{sig_b64}"
 
-    with pytest.raises((InvalidSignature, MalformedCredential)):
+    with pytest.raises(InvalidSignature):
         verify_signature(tampered, key.verify_key)
 
 
@@ -137,3 +154,21 @@ def test_signed_credential_is_a_value_type() -> None:
     a = sign(credential, key)
     b = SignedCredential(credential=a.credential, signature=a.signature)
     assert a == b
+
+
+def test_scoped_credential_is_frozen() -> None:
+    """The dataclass is ``frozen=True`` — fields cannot be reassigned.
+
+    Pins the contract that once signed, a credential cannot be mutated
+    in place. Without this, a buggy caller could change ``action`` after
+    signing and then claim the credential covered the new action — the
+    signature would still verify against the original payload, but the
+    in-memory object would lie about its own contents.
+    """
+    from dataclasses import FrozenInstanceError
+
+    credential = _make_credential()
+    with pytest.raises(FrozenInstanceError):
+        credential.action = "delete"  # type: ignore[misc]
+    with pytest.raises(FrozenInstanceError):
+        credential.user = "mallory@example.com"  # type: ignore[misc]

@@ -39,14 +39,25 @@ def _ctx(**overrides: str) -> RequestContext:
 def test_allowed_request_issues_a_verified_credential(
     gateway: CredentialGateway,
 ) -> None:
+    """Every identity facet from the request context appears in the signed
+    credential, and the credential verifies under the gateway's key.
+
+    Checking only a subset (user/tool/action) would let a regression that
+    dropped, say, ``agent`` or ``audience`` from the signed payload pass
+    silently. The credential carries six identity facets; pin all six.
+    """
     signed = gateway.issue(_ctx())
 
     # The credential round-trips through the gateway's verify key.
     recovered = verify_signature(signed.encode(), gateway.verify_key)
     assert recovered.user == "alice@example.com"
+    assert recovered.agent == "agent-runtime-A"
+    assert recovered.task == "task-001"
     assert recovered.tool == "issues"
     assert recovered.action == "list"
+    assert recovered.audience == "tool-server.issues"
     assert recovered.expires_at > time.time()
+    assert recovered.expires_at > recovered.issued_at
 
 
 def test_allowed_request_emits_credential_issued_audit(
