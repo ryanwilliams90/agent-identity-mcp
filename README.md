@@ -1,6 +1,7 @@
 # Agent Identity / MCP Credential Plane — Reference Implementation
 
 [![ci](https://github.com/ryanwilliams90/agent-identity-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/ryanwilliams90/agent-identity-mcp/actions/workflows/ci.yml)
+[![codeql](https://github.com/ryanwilliams90/agent-identity-mcp/actions/workflows/codeql.yml/badge.svg)](https://github.com/ryanwilliams90/agent-identity-mcp/actions/workflows/codeql.yml)
 
 A small, working demonstration of gateway-mediated scoped credential issuance for agent runtimes calling MCP-style tools.
 
